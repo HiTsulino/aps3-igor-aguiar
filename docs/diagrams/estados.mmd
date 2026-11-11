@@ -1,0 +1,48 @@
+stateDiagram-v2
+    [*] --> Recebida
+
+    Recebida --> Interpretando : consultaEnviada [texto válido] / registrarConsulta()
+    Recebida --> Rejeitada : consultaEnviada [texto vazio ou acima do limite] / registrarRejeicao()
+
+    Interpretando --> AguardandoDados : intencaoClassificada [dadosFaltantes não vazio] / montarPedidoDeDados()
+    Interpretando --> Recuperando : intencaoClassificada [dadosFaltantes vazio] / reformularConsulta()
+
+    AguardandoDados --> Interpretando : dadosRecebidos [dentro de 30 min] / anexarContexto()
+    AguardandoDados --> Expirada : prazoExcedido [30 min sem resposta] / encerrarConsulta()
+
+    state Recuperando {
+        [*] --> BuscandoTrechos
+        BuscandoTrechos --> Reranqueando : trechosRecebidos
+        Reranqueando --> [*] : trechosOrdenados
+    }
+
+    Recuperando --> Gerando : recuperacaoConcluida [maxScore acima do limiar] / montarPrompt()
+    Recuperando --> RespondidaComIncerteza : recuperacaoConcluida [maxScore abaixo do limiar] / comporRespostaDeIncerteza()
+
+    Gerando --> Gerando : timeoutLLM [tentativas igual a 1] / reenviarPrompt()
+    Gerando --> Validando : rascunhoRecebido / extrairCitacoes()
+    Gerando --> Falhou : timeoutLLM [tentativas igual a 2] / registrarFalha()
+
+    Validando --> Respondida : validacaoConcluida [todas as citações válidas] / persistirResposta()
+    Validando --> RespondidaComIncerteza : validacaoConcluida [citação inválida ou fonte vencida] / sinalizarIncerteza()
+
+    Respondida --> [*]
+    RespondidaComIncerteza --> [*]
+    Falhou --> [*]
+    Rejeitada --> [*]
+    Expirada --> [*]
+
+    Interpretando : entry / iniciarCronometro()
+    Interpretando : do / classificarIntencao()
+    Interpretando : exit / registrarIntencao()
+
+    Gerando : entry / incrementarTentativas()
+    Gerando : do / chamarLLM()
+    Gerando : exit / registrarTokensConsumidos()
+```
+
+- **Estado inicial:** `[*]` → `Recebida`.
+- **Subestados:** `Recuperando` (`BuscandoTrechos`, `Reranqueando`).
+- **Estados terminais:** `Respondida`, `RespondidaComIncerteza`, `Falhou`, `Rejeitada`, `Expirada`.
+- **Transições formais** `Gatilho [Guarda] / Ação()`: todas as transições com guarda.
+- **Ações internas:** `entry /`, `do /` e `exit /` em `Interpretando` e `Gerando`.

@@ -1,0 +1,78 @@
+sequenceDiagram
+    autonumber
+    actor U as Usuário
+    participant CC as ChatController
+    participant OR as ConsultaOrchestrator
+    participant QI as QueryInterpreter
+    participant RS as RetrievalService
+    participant LG as LLMGateway
+    participant VS as VectorStore
+    participant CV as CitationValidator
+    participant AP as AuditPublisher
+
+    U->>CC: enviarConsulta(ConsultaRequestDTO)
+    CC->>OR: processar(ConsultaRequestDTO)
+    OR-)AP: publicarEvento(EventoAuditoriaDTO)
+    Note right of AP: CONSULTA_RECEBIDA (RabbitMQ, não bloqueia)
+
+    OR->>QI: interpretar(ConsultaRequestDTO)
+    QI->>LG: classificarIntencao(PromptDTO)
+    LG-->>QI: IntencaoDTO
+    QI-->>OR: ConsultaEstruturadaDTO
+
+    alt dadosFaltantes não vazio
+        OR-->>CC: RespostaOrientativaDTO
+        Note right of OR: tipo = SOLICITACAO_DADOS (RF11)
+    else dados mínimos presentes
+        OR->>RS: recuperar(ConsultaEstruturadaDTO)
+        loop para cada subconsulta técnica
+            RS->>LG: gerarEmbedding(String)
+            LG-->>RS: VetorDTO
+            RS->>VS: buscarSimilares(ConsultaVetorialDTO)
+            VS-->>RS: TrechoNormativoDTO[]
+        end
+        RS-->>OR: ResultadoRecuperacaoDTO
+
+        alt maxScore abaixo do limiar
+            OR-->>CC: RespostaOrientativaDTO
+            Note right of OR: tipo = INCERTEZA, sem fundamento normativo (RF11)
+        else fundamentação suficiente
+            OR->>LG: gerarResposta(PromptDTO)
+            alt LLM indisponível após retentativas
+                LG--xOR: LLMIndisponivelException
+                OR-->>CC: RespostaOrientativaDTO
+                Note right of OR: tipo = ERRO_SERVICO
+            else LLM respondeu no prazo
+                LG-->>OR: RascunhoRespostaDTO
+                OR->>CV: validar(RascunhoRespostaDTO, ResultadoRecuperacaoDTO)
+                CV-->>OR: ResultadoValidacaoDTO
+                alt citacoesValidas = false
+                    OR-->>CC: RespostaOrientativaDTO
+                    Note right of OR: tipo = INCERTEZA, citação inválida ou fonte vencida (RF10, RF11)
+                else citacoesValidas = true
+                    OR-->>CC: RespostaOrientativaDTO
+                    Note right of OR: tipo = ORIENTACAO_FUNDAMENTADA com fontes (RF04, RF10)
+                end
+            end
+        end
+    end
+
+    OR-)AP: publicarEvento(EventoAuditoriaDTO)
+    Note right of AP: CONSULTA_CONCLUIDA
+    CC-->>U: RespostaOrientativaDTO
+```
+
+### Verificação da Regra de Consistência
+
+| Mensagem no diagrama | Lifeline destino | Operação pública (Seção 2) |
+|---|---|---|
+| `enviarConsulta(ConsultaRequestDTO)` | ChatController | `+enviarConsulta(ConsultaRequestDTO): RespostaOrientativaDTO` ✔ |
+| `processar(ConsultaRequestDTO)` | ConsultaOrchestrator | `+processar(ConsultaRequestDTO): RespostaOrientativaDTO` ✔ |
+| `interpretar(ConsultaRequestDTO)` | QueryInterpreter | `+interpretar(ConsultaRequestDTO): ConsultaEstruturadaDTO` ✔ |
+| `classificarIntencao(PromptDTO)` | LLMGateway | `+classificarIntencao(PromptDTO): IntencaoDTO` ✔ |
+| `recuperar(ConsultaEstruturadaDTO)` | RetrievalService | `+recuperar(ConsultaEstruturadaDTO): ResultadoRecuperacaoDTO` ✔ |
+| `gerarEmbedding(String)` | LLMGateway | `+gerarEmbedding(String): VetorDTO` ✔ |
+| `buscarSimilares(ConsultaVetorialDTO)` | VectorStore | `+buscarSimilares(ConsultaVetorialDTO): TrechoNormativoDTO[]` ✔ |
+| `gerarResposta(PromptDTO)` | LLMGateway | `+gerarResposta(PromptDTO): RascunhoRespostaDTO` ✔ |
+| `validar(RascunhoRespostaDTO, ResultadoRecuperacaoDTO)` | CitationValidator | `+validar(...): ResultadoValidacaoDTO` ✔ |
+| `publicarEvento(EventoAuditoriaDTO)` | AuditPublisher | `+publicarEvento(EventoAuditoriaDTO): void` ✔ |
